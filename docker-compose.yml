@@ -17,5 +17,36 @@ services:
       timeout: 5s
       retries: 5
 
+  # Aplica as migrations e encerra; a API só sobe depois que ele termina com sucesso
+  migrate:
+    build:
+      context: .
+      target: build
+    container_name: agendamento-migrate
+    environment:
+      DATABASE_URL: postgresql://app:app@db:5432/agendamento?schema=public
+    command: ["npx", "prisma", "migrate", "deploy"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  app:
+    build:
+      context: .
+      target: runtime
+    image: agendamento-medico:latest
+    container_name: agendamento-app
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://app:app@db:5432/agendamento?schema=public
+      PORT: 3333
+    ports:
+      - "3333:3333"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
 volumes:
   pgdata:
