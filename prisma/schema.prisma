@@ -2,6 +2,8 @@ generator client {
   provider     = "prisma-client"
   output       = "../src/generated/prisma"
   moduleFormat = "cjs"
+  // Imports sem extensão: o código gerado precisa rodar compilado (node dist/), não só via tsx
+  importFileExtension = ""
 }
 
 datasource db {
