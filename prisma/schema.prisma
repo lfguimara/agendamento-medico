@@ -1,0 +1,55 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum StatusConsulta {
+  AGENDADA
+  CANCELADA
+  CONCLUIDA
+}
+
+model Paciente {
+  id        String     @id @default(uuid())
+  nome      String
+  cpf       String     @unique
+  email     String     @unique
+  telefone  String
+  consultas Consulta[]
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  @@map("pacientes")
+}
+
+model Medico {
+  id            String     @id @default(uuid())
+  nome          String
+  crm           String     @unique
+  especialidade String
+  consultas     Consulta[]
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+
+  @@map("medicos")
+}
+
+model Consulta {
+  id         String         @id @default(uuid())
+  dataHora   DateTime       @map("data_hora")
+  status     StatusConsulta @default(AGENDADA)
+  pacienteId String         @map("paciente_id")
+  paciente   Paciente       @relation(fields: [pacienteId], references: [id])
+  medicoId   String         @map("medico_id")
+  medico     Medico         @relation(fields: [medicoId], references: [id])
+  createdAt  DateTime       @default(now()) @map("created_at")
+  updatedAt  DateTime       @updatedAt @map("updated_at")
+
+  @@index([medicoId, dataHora])
+  @@map("consultas")
+}
