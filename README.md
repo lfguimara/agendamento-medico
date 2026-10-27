@@ -10,6 +10,7 @@ API REST para agendamento de consultas médicas, com cadastro de pacientes e mé
 - [Como rodar](#como-rodar)
 - [Variáveis de ambiente](#variáveis-de-ambiente)
 - [Endpoints](#endpoints)
+- [Testes](#testes)
 - [Docker](#docker)
 - [Scripts](#scripts)
 - [Próximos passos do time](#próximos-passos-do-time)
@@ -241,6 +242,58 @@ Erros de validação trazem também os campos inválidos:
 | 409 | Conflito: dado único duplicado, horário ocupado ou registro com vínculos |
 | 500 | Erro inesperado (detalhes só no log do servidor) |
 
+## Testes
+
+São dois tipos de teste, separados em dois projetos do Jest:
+
+| Tipo | Onde | Banco | Comando |
+|---|---|---|---|
+| **Unitários** | `src/modules/**/*.service.test.ts` e `src/app.test.ts` | Não usa (Prisma mockado) | `npm test` |
+| **Integração** | `src/tests/integration/*.int.test.ts` | PostgreSQL real (`agendamento_test`) | `npm run test:integration` |
+
+```bash
+npm test                    # só unitários: rápido, não precisa de banco
+npm run db:up               # sobe o Postgres (necessário para a integração)
+npm run test:integration    # rotas de ponta a ponta com supertest
+npm run test:all            # tudo
+npm run test:coverage       # tudo + relatório de cobertura em coverage/
+```
+
+### Unitários
+
+Testam as regras de negócio dos services isoladamente. O `PrismaClient` é substituído por um mock (`src/tests/helpers/prismaMock.ts`) e o `ConsultaService` recebe um relógio fixo, então as regras de passado e de 24h são testadas sem depender da hora real, inclusive nos limites (exatamente 24h, exatamente agora).
+
+```ts
+const { mock, db } = criarPrismaMock();
+const service = new ConsultaService(db, () => new Date('2026-11-01T10:00:00Z'));
+
+mock.consulta.findUnique.mockResolvedValue(consulta);
+await expect(service.cancelar(id)).rejects.toMatchObject({ statusCode: 400 });
+```
+
+### Integração
+
+Fazem requisições HTTP reais ao `app` com `supertest`, passando por rotas, validação (zod), services, `errorHandler` e PostgreSQL. Cobrem status HTTP, corpo das respostas e as 7 regras de negócio de ponta a ponta.
+
+- **Banco separado**: por padrão usam `postgresql://app:app@localhost:5432/agendamento_test`, no mesmo Postgres do `docker compose`. Para usar outro banco, copie `.env.test.example` para `.env.test` e ajuste, ou defina a variável `TEST_DATABASE_URL` (tem prioridade, útil no CI).
+- **Migrations automáticas**: antes da suíte, o `globalSetup` roda `prisma migrate deploy`, que cria o banco `agendamento_test` se ele não existir.
+- **Isolamento**: todas as tabelas são limpas antes de cada teste, e os arquivos rodam em sequência (`--runInBand`).
+- **Trava de segurança**: os testes se recusam a rodar se o nome do banco não terminar em `_test`, para nunca apagar os dados de desenvolvimento.
+
+### Estrutura
+
+```
+src/
+├── app.test.ts                          # unitário: GET /health
+├── modules/*/[nome].service.test.ts     # unitários dos services
+└── tests/
+    ├── helpers/
+    │   ├── prismaMock.ts                # PrismaClient falso para os unitários
+    │   └── db.ts                        # limpar banco, fábricas de paciente/médico/consulta, datas relativas
+    ├── setup/                           # configuração do Jest para a integração
+    └── integration/                     # pacientes, médicos e consultas
+```
+
 ## Docker
 
 O `Dockerfile` é **multi-stage**:
@@ -271,7 +324,10 @@ docker build --target runtime -t agendamento-medico .
 | `npm run dev` | Servidor em desenvolvimento com reload (tsx) |
 | `npm run build` | Compila TypeScript para `dist/` |
 | `npm start` | Roda a versão compilada |
-| `npm test` | Executa os testes (Jest) |
+| `npm test` | Testes unitários (sem banco) |
+| `npm run test:integration` | Testes de integração (precisa do Postgres no ar) |
+| `npm run test:all` | Todos os testes |
+| `npm run test:coverage` | Todos os testes com relatório de cobertura |
 | `npm run db:up` / `db:down` | Sobe / derruba o Postgres |
 | `npm run db:migrate` | Cria e aplica migrations (desenvolvimento) |
 | `npm run db:generate` | Gera o Prisma Client |
@@ -279,24 +335,15 @@ docker build --target runtime -t agendamento-medico .
 
 ## Próximos passos do time
 
-### Testes automatizados
-
-- **Unitários (services)**: os services recebem o `PrismaClient` pelo construtor; passe um objeto mock com os métodos usados (`findUnique`, `findFirst`, `create`...). O `ConsultaService` também recebe o relógio:
-  ```ts
-  const agoraFixo = () => new Date('2026-11-01T10:00:00Z');
-  const service = new ConsultaService(prismaMock, agoraFixo);
-  ```
-  Isso permite testar as regras de passado e de 24h sem depender da hora real.
-- **Integração (rotas)**: use `supertest` com o `app` exportado de `src/app.ts` (exemplo em `src/app.test.ts`). Use um banco separado para testes, por exemplo um `DATABASE_URL` apontando para `agendamento_test`.
-
 ### CI (GitHub Actions)
 
 Sugestão de etapas a cada push/PR:
 
 1. `npm ci` (já roda o `prisma generate` via `postinstall`)
 2. `npx tsc --noEmit`
-3. `npm test`, com um service container `postgres:16-alpine` e `npx prisma migrate deploy` antes, se houver testes de integração
-4. `docker build --target runtime .`
+3. `npm test` (unitários)
+4. `npm run test:integration`, com um service container `postgres:16-alpine` usuário/senha `app` (a URL padrão já funciona) ou `TEST_DATABASE_URL` definida (as migrations são aplicadas pelo próprio Jest)
+5. `docker build --target runtime .`
 
 ### CD (publicação da imagem)
 
