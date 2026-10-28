@@ -3,9 +3,9 @@ name: CI - Agendamento Médico
 
 on:
   push:
-    branches: [main, feat/CI]
+    branches: main
   pull_request:
-    branches: [main, feat/CI]
+    branches: main
 
 permissions:
   contents: read
