@@ -1,5 +1,7 @@
 # 🏥 Agendamento Médico
 
+[![CI/CD](https://github.com/lfguimara/agendamento-medico/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lfguimara/agendamento-medico/actions/workflows/ci.yml)
+
 API REST para agendamento de consultas médicas, com cadastro de pacientes e médicos e regras de negócio para evitar conflitos de horário. Projeto da disciplina de DevOps.
 
 ## Sumário
@@ -13,7 +15,8 @@ API REST para agendamento de consultas médicas, com cadastro de pacientes e mé
 - [Testes](#testes)
 - [Docker](#docker)
 - [Scripts](#scripts)
-- [Próximos passos do time](#próximos-passos-do-time)
+- [CI/CD](#cicd)
+- [Limitações conhecidas](#limitações-conhecidas)
 
 ## Stack
 
@@ -26,6 +29,7 @@ API REST para agendamento de consultas médicas, com cadastro de pacientes e mé
 | ORM | Prisma 7.10.1 (driver adapter `@prisma/adapter-pg`) |
 | Testes | Jest + Supertest |
 | Containers | Docker (multi-stage) + Docker Compose |
+| CI/CD | GitHub Actions + GitHub Container Registry (GHCR) |
 
 ## Arquitetura
 
@@ -333,21 +337,70 @@ docker build --target runtime -t agendamento-medico .
 | `npm run db:generate` | Gera o Prisma Client |
 | `npm run db:studio` | Interface visual do banco |
 
-## Próximos passos do time
+## CI/CD
 
-### CI (GitHub Actions)
+O pipeline fica em [`.github/workflows/ci.yml`](.github/workflows/ci.yml) e roda no GitHub Actions.
 
-Sugestão de etapas a cada push/PR:
+```mermaid
+flowchart LR
+    PR[Pull request<br/>para main] --> CI
+    PUSH[Push / merge<br/>na main] --> CI
+    subgraph CI[Job: Validar aplicação]
+        direction TB
+        A[npm ci] --> B[npm audit]
+        B --> C[tsc --noEmit]
+        C --> D[Testes unitários]
+        D --> E[Testes de integração<br/>Postgres service container]
+        E --> F[npm run build]
+        F --> G[docker build]
+    end
+    CI -->|só em push na main| CD
+    subgraph CD[Job: Publicar imagem Docker]
+        direction TB
+        H[Login no GHCR] --> I[Build + push<br/>com cache do Buildx]
+    end
+    CD --> REG[(ghcr.io)]
+```
 
-1. `npm ci` (já roda o `prisma generate` via `postinstall`)
-2. `npx tsc --noEmit`
-3. `npm test` (unitários)
-4. `npm run test:integration`, com um service container `postgres:16-alpine` usuário/senha `app` (a URL padrão já funciona) ou `TEST_DATABASE_URL` definida (as migrations são aplicadas pelo próprio Jest)
-5. `docker build --target runtime .`
+### CI: job `ci`
 
-### CD (publicação da imagem)
+Roda em **todo pull request e push para a `main`**. Se qualquer etapa falhar, o PR fica marcado em vermelho.
 
-Publique no GHCR (`ghcr.io/lfguimara/agendamento-medico`) usando o `GITHUB_TOKEN` do próprio Actions, com `permissions: packages: write`. Assim não é preciso criar secrets.
+| Etapa | O que garante |
+|---|---|
+| `npm ci` | Instalação reproduzível, idêntica ao `package-lock.json`. Também gera o Prisma Client |
+| `npm audit --audit-level=high` | Nenhuma dependência com vulnerabilidade alta ou crítica |
+| `npx tsc --noEmit` | O código compila sem erros de tipo |
+| `npm test` | Regras de negócio corretas (unitários, sem banco) |
+| `npm run test:integration` | Rotas funcionando de ponta a ponta contra um PostgreSQL 16 real (service container) |
+| `npm run build` | O build de produção é gerado |
+| `docker build --target runtime` | O Dockerfile continua válido |
+
+### CD: job `publish`
+
+Roda **só em push na `main`** (ou seja, depois do merge de um PR) e **só se o CI passar** (`needs: ci`).
+
+- Publica a imagem no **GitHub Container Registry** usando o `GITHUB_TOKEN` do próprio Actions, sem secrets extras
+- Tags geradas:
+  - `latest`: sempre a versão mais recente da `main`
+  - `sha-<commit>`: uma tag fixa por commit, útil para rollback
+- Usa o cache do Docker Buildx (`type=gha`), então builds seguintes reaproveitam as camadas que não mudaram
+
+### Usando a imagem publicada
+
+```bash
+docker pull ghcr.io/lfguimara/agendamento-medico:latest
+```
+
+> O pacote no GHCR é **privado** por padrão. Para baixar, autentique-se com `docker login ghcr.io` usando um Personal Access Token com escopo `read:packages`, ou torne o pacote público em *GitHub → Packages → agendamento-medico → Package settings*.
+
+Para rodar a imagem publicada no lugar do build local, troque `build:` por `image: ghcr.io/lfguimara/agendamento-medico:latest` no serviço `app` do `docker-compose.yml`.
+
+### Fluxo de trabalho
+
+1. Crie uma branch a partir da `main` (`feat/...`, `fix/...`, `docs/...`)
+2. Abra um pull request: o CI valida automaticamente
+3. Com o CI verde, faça o merge: o CD publica a nova imagem
 
 ## Limitações conhecidas
 
